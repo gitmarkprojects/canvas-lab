@@ -377,7 +377,6 @@
       gap: 6px;
       font-size: 13px;
       line-height: 1.5;
-      white-space: pre-wrap;
       color: var(--ink);
     }
 
@@ -394,6 +393,78 @@
     .chat-meta strong { font-weight: 500; color: var(--muted); }
 
     .chat-message[data-role="user"] .chat-meta strong { color: var(--accent-ink); }
+
+    .markdown-body {
+      display: grid;
+      gap: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    .markdown-body p,
+    .markdown-body h1,
+    .markdown-body h2,
+    .markdown-body h3,
+    .markdown-body blockquote,
+    .markdown-body pre,
+    .markdown-body ul,
+    .markdown-body ol {
+      margin: 0;
+    }
+
+    .markdown-body h1,
+    .markdown-body h2,
+    .markdown-body h3 {
+      color: var(--ink);
+      line-height: 1.2;
+      font-weight: 600;
+    }
+
+    .markdown-body h1 { font-size: 18px; }
+    .markdown-body h2 { font-size: 15px; }
+    .markdown-body h3 { font-size: 13px; }
+
+    .markdown-body ul,
+    .markdown-body ol {
+      display: grid;
+      gap: 4px;
+      padding-left: 18px;
+    }
+
+    .markdown-body blockquote {
+      padding-left: 10px;
+      border-left: 2px solid var(--line-strong);
+      color: var(--muted);
+    }
+
+    .markdown-body code {
+      padding: 1px 4px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--surface-soft);
+      font-family: var(--font-mono);
+      font-size: 0.92em;
+    }
+
+    .markdown-body pre {
+      padding: 10px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-soft);
+    }
+
+    .markdown-body pre code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      white-space: pre;
+    }
+
+    .markdown-body a {
+      color: var(--accent-ink);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
 
     /* Composer */
     .chat-composer {
@@ -967,6 +1038,142 @@
       return path.join(" > ");
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    function safeMarkdownUrl(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "#";
+      if (/^(#|\/(?!\/)|\.\/|\.\.\/)/.test(raw)) return escapeHtml(raw);
+
+      try {
+        const url = new URL(raw, window.location.origin);
+        if (["http:", "https:", "mailto:"].includes(url.protocol)) return escapeHtml(raw);
+      } catch (_) {}
+
+      return "#";
+    }
+
+    function renderInlineMarkdown(value) {
+      let source = escapeHtml(value);
+      const codeTokens = [];
+
+      source = source.replace(/`([^`]+)`/g, (_, code) => {
+        const token = `@@CODE_${codeTokens.length}@@`;
+        codeTokens.push(`<code>${code}</code>`);
+        return token;
+      });
+
+      source = source.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_, label, href) => {
+        return `<a href="${safeMarkdownUrl(href)}" target="_blank" rel="noreferrer">${label}</a>`;
+      });
+      source = source.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+      source = source.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+      source = source.replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+      source = source.replace(/(^|[\s(])_([^_\n]+)_/g, "$1<em>$2</em>");
+
+      codeTokens.forEach((html, index) => {
+        source = source.replace(`@@CODE_${index}@@`, html);
+      });
+
+      return source;
+    }
+
+    function renderMarkdown(value) {
+      const lines = String(value || "").replace(/\r\n?/g, "\n").split("\n");
+      const html = [];
+      let paragraph = [];
+      let listType = null;
+      let listItems = [];
+      let codeLines = null;
+
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        html.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
+        paragraph = [];
+      }
+
+      function flushList() {
+        if (!listType) return;
+        html.push(`<${listType}>${listItems.map((item) => `<li>${item}</li>`).join("")}</${listType}>`);
+        listType = null;
+        listItems = [];
+      }
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (codeLines) {
+          if (trimmed.startsWith("```")) {
+            html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+            codeLines = null;
+          } else {
+            codeLines.push(line);
+          }
+          continue;
+        }
+
+        if (trimmed.startsWith("```")) {
+          flushParagraph();
+          flushList();
+          codeLines = [];
+          continue;
+        }
+
+        if (!trimmed) {
+          flushParagraph();
+          flushList();
+          continue;
+        }
+
+        const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+        if (heading) {
+          flushParagraph();
+          flushList();
+          html.push(`<h${heading[1].length}>${renderInlineMarkdown(heading[2])}</h${heading[1].length}>`);
+          continue;
+        }
+
+        const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+        const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+        if (unordered || ordered) {
+          flushParagraph();
+          const nextType = unordered ? "ul" : "ol";
+          if (listType && listType !== nextType) flushList();
+          listType = nextType;
+          listItems.push(renderInlineMarkdown((unordered || ordered)[1]));
+          continue;
+        }
+
+        if (trimmed.startsWith(">")) {
+          flushParagraph();
+          flushList();
+          html.push(`<blockquote>${renderInlineMarkdown(trimmed.replace(/^>\s?/, ""))}</blockquote>`);
+          continue;
+        }
+
+        flushList();
+        paragraph.push(trimmed);
+      }
+
+      flushParagraph();
+      flushList();
+      if (codeLines) html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+
+      return html.join("");
+    }
+
+    function MarkdownMessage({ content }) {
+      return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />;
+    }
+
     async function loadDesignProject(project) {
       window.DesignProject = null;
       const projectPath = encodeURIComponent(project);
@@ -1261,13 +1468,13 @@
                   <strong>{message.role === "user" ? "You" : message.agent || "agent"}</strong>
                   <span>{message.selector || message.exit_code === 0 ? "done" : ""}</span>
                 </div>
-                <div>{message.content}</div>
+                <MarkdownMessage content={message.content} />
               </article>
             ))}
             {error && (
               <article className="chat-message">
                 <div className="chat-meta"><strong>Error</strong></div>
-                <div>{error}</div>
+                <MarkdownMessage content={error} />
               </article>
             )}
           </section>
@@ -1669,7 +1876,7 @@
               setPageWidth={setPageWidth}
             />
             {loadError ? (
-              <section className="chat-log"><article className="chat-message"><strong>Project load failed</strong><div>{loadError}</div></article></section>
+              <section className="chat-log"><article className="chat-message"><strong>Project load failed</strong><MarkdownMessage content={loadError} /></article></section>
             ) : viewMode === "page" ? (
               <PageView
                 designProject={designProject}

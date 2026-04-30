@@ -4,6 +4,8 @@ Tiny local design canvas inspired by Claude Design.
 
 Use Codex or Claude Code to wireframe directly in files. The browser is just the viewer: chat on the left, canvas/page preview on the right.
 
+![Canvas Lab interface preview](docs/interface-preview.png)
+
 ## Start
 
 Double-click `start.command`.
