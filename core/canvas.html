@@ -1,0 +1,1702 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Design Canvas</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("canvas-theme");
+        var theme = stored === "light" || stored === "dark"
+          ? stored
+          : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+        var width = parseInt(localStorage.getItem("canvas-panel-width") || "320", 10);
+        if (!Number.isFinite(width)) width = 320;
+        width = Math.min(Math.max(width, 280), 640);
+        document.documentElement.style.setProperty("--panel-width", width + "px");
+      } catch (_) {}
+    })();
+  </script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --font-sans: "IBM Plex Sans", ui-sans-serif, sans-serif;
+      --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --panel-width: 320px;
+
+      font-family: var(--font-sans);
+    }
+
+    :root,
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --page: oklch(98% 0.003 250);
+      --surface: oklch(100% 0 0);
+      --surface-soft: oklch(98.5% 0.003 250);
+      --ink: oklch(22% 0.012 250);
+      --muted: oklch(50% 0.012 250);
+      --faint: oklch(68% 0.01 250);
+      --line: oklch(92% 0.006 250);
+      --line-strong: oklch(85% 0.01 250);
+      --canvas-dot: oklch(89% 0.01 250);
+      --accent: oklch(56% 0.11 200);
+      --accent-soft: oklch(94% 0.025 200);
+      --accent-ink: oklch(38% 0.13 200);
+      --danger: oklch(58% 0.18 28);
+      --warn: oklch(63% 0.17 42);
+      --success: oklch(58% 0.12 160);
+      --overflow: oklch(62% 0.19 29);
+      --shadow: 0 1px 2px oklch(20% 0.02 250 / 0.04), 0 12px 32px oklch(20% 0.02 250 / 0.08);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: oklch(17% 0.008 250);
+      --surface: oklch(21% 0.01 250);
+      --surface-soft: oklch(19% 0.009 250);
+      --ink: oklch(94% 0.005 250);
+      --muted: oklch(66% 0.012 250);
+      --faint: oklch(48% 0.012 250);
+      --line: oklch(28% 0.012 250);
+      --line-strong: oklch(38% 0.014 250);
+      --canvas-dot: oklch(26% 0.012 250);
+      --accent: oklch(72% 0.12 200);
+      --accent-soft: oklch(28% 0.05 200);
+      --accent-ink: oklch(82% 0.1 200);
+      --danger: oklch(68% 0.18 28);
+      --warn: oklch(72% 0.16 42);
+      --success: oklch(70% 0.12 160);
+      --overflow: oklch(70% 0.18 29);
+      --shadow: 0 1px 2px oklch(0% 0 0 / 0.3), 0 16px 36px oklch(0% 0 0 / 0.4);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      letter-spacing: 0;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      text-wrap: pretty;
+    }
+
+    button, input, select, textarea {
+      font: inherit;
+      color: inherit;
+    }
+
+    ::selection { background: var(--accent-soft); color: var(--accent-ink); }
+
+    .workspace {
+      height: 100vh;
+      display: grid;
+      grid-template-columns: var(--panel-width, 320px) 1fr;
+      min-width: 320px;
+    }
+
+    /* Agent panel */
+    .agent-panel {
+      position: relative;
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      border-right: 1px solid var(--line);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .panel-resizer {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      right: -4px;
+      width: 8px;
+      cursor: col-resize;
+      z-index: 6;
+      background: transparent;
+      touch-action: none;
+    }
+
+    .panel-resizer::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1px;
+      background: transparent;
+      transition: background 0.15s ease, width 0.15s ease;
+    }
+
+    .panel-resizer:hover::after,
+    .panel-resizer.is-dragging::after {
+      background: var(--accent);
+      width: 2px;
+    }
+
+    body.is-resizing,
+    body.is-resizing * {
+      cursor: col-resize !important;
+      user-select: none !important;
+    }
+
+    .agent-header {
+      display: grid;
+      gap: 16px;
+      padding: 20px 20px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .agent-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .agent-title strong {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+    }
+
+    .project-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .project-row > span:first-child {
+      flex: 0 0 48px;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+
+    .agent-select,
+    .project-select,
+    .project-input {
+      height: 30px;
+      flex: 1 1 auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 12px;
+      padding: 0 8px;
+      min-width: 0;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .agent-select { flex: 0 0 96px; }
+    .project-select, .project-input { width: auto; }
+
+    .agent-select:hover,
+    .project-select:hover,
+    .project-input:hover { border-color: var(--line-strong); }
+
+    .agent-select:focus,
+    .project-select:focus,
+    .project-input:focus,
+    .chat-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent), transparent 82%);
+    }
+
+    .selection-context,
+    .agent-status {
+      display: grid;
+      gap: 4px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .selection-context > span:first-child {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+
+    .selection-context code {
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .agent-status {
+      position: relative;
+      padding-left: 16px;
+    }
+
+    .agent-status::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 6px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--faint);
+      transition: background 0.2s ease;
+    }
+
+    .agent-status[data-state="running"]::before {
+      background: var(--accent);
+      animation: status-pulse 1.6s ease-out infinite;
+    }
+    .agent-status[data-state="done"]::before { background: var(--success); }
+    .agent-status[data-state="error"]::before { background: var(--danger); }
+
+    @keyframes status-pulse {
+      0%   { box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent), transparent 30%); }
+      100% { box-shadow: 0 0 0 8px color-mix(in oklch, var(--accent), transparent 100%); }
+    }
+
+    .agent-status strong {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink);
+    }
+
+    .agent-status[data-state="error"] strong { color: var(--danger); }
+
+    .agent-status > span:last-child {
+      color: var(--muted);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Chat header */
+    .chat-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px 16px 0;
+    }
+
+    .chat-toolbar-label {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+
+    .new-chat-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 10px 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+    }
+
+    .new-chat-button:hover:not(:disabled) {
+      border-color: var(--line-strong);
+      background: var(--surface-soft);
+      color: var(--ink);
+    }
+
+    .new-chat-button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .new-chat-button svg { display: block; }
+
+    /* Theme toggle */
+    .theme-toggle {
+      width: 28px;
+      height: 28px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+    }
+
+    .theme-toggle:hover {
+      border-color: var(--line-strong);
+      color: var(--ink);
+      background: var(--surface-soft);
+    }
+
+    .theme-toggle svg { display: block; }
+
+    .agent-title-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Chat */
+    .chat-log {
+      display: grid;
+      align-content: start;
+      gap: 18px;
+      padding: 18px 20px;
+      overflow: auto;
+    }
+
+    .chat-log::-webkit-scrollbar { width: 8px; }
+    .chat-log::-webkit-scrollbar-thumb {
+      background: var(--line-strong);
+      border-radius: 4px;
+      border: 2px solid var(--surface);
+    }
+    .chat-log::-webkit-scrollbar-track { background: transparent; }
+
+    .chat-message {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      color: var(--ink);
+    }
+
+    .chat-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+    }
+
+    .chat-meta strong { font-weight: 500; color: var(--muted); }
+
+    .chat-message[data-role="user"] .chat-meta strong { color: var(--accent-ink); }
+
+    /* Composer */
+    .chat-composer {
+      display: grid;
+      gap: 0;
+      margin: 8px 16px 16px;
+      padding: 0;
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+
+    .chat-composer:hover { border-color: var(--line-strong); }
+
+    .chat-composer:focus-within {
+      border-color: var(--accent);
+      background: var(--surface);
+      box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent), transparent 82%);
+    }
+
+    .chat-input {
+      min-height: 60px;
+      max-height: 240px;
+      resize: none;
+      padding: 12px 14px 4px;
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .chat-input:focus { outline: none; box-shadow: none; }
+    .chat-input::placeholder { color: var(--faint); }
+
+    .chat-input::-webkit-scrollbar { width: 6px; }
+    .chat-input::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+
+    .composer-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 6px 6px 10px;
+    }
+
+    .composer-ghost {
+      height: 26px;
+      padding: 0 8px;
+      border: 0;
+      background: transparent;
+      color: var(--faint);
+      font-size: 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .composer-ghost:hover:not(:disabled) {
+      background: color-mix(in oklch, var(--ink), transparent 94%);
+      color: var(--muted);
+    }
+
+    .composer-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .composer-hint {
+      flex: 1;
+      font-size: 11px;
+      color: var(--faint);
+      font-family: var(--font-mono);
+      letter-spacing: 0;
+      text-align: left;
+      padding-left: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .composer-send {
+      width: 30px;
+      height: 30px;
+      display: inline-grid;
+      place-items: center;
+      border: 0;
+      border-radius: 999px;
+      background: var(--ink);
+      color: var(--page);
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.08s ease, opacity 0.15s ease;
+    }
+
+    .composer-send:hover:not(:disabled) {
+      background: color-mix(in oklch, var(--ink), var(--accent) 35%);
+    }
+
+    .composer-send:active:not(:disabled) { transform: scale(0.94); }
+
+    .composer-send:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent), transparent 70%);
+    }
+
+    .composer-send:disabled {
+      background: color-mix(in oklch, var(--line-strong), transparent 20%);
+      color: var(--faint);
+      cursor: not-allowed;
+    }
+
+    .composer-spinner {
+      width: 12px;
+      height: 12px;
+      border: 1.5px solid color-mix(in oklch, var(--page), transparent 60%);
+      border-top-color: var(--page);
+      border-radius: 50%;
+      animation: composer-spin 0.7s linear infinite;
+    }
+
+    @keyframes composer-spin {
+      to { transform: rotate(1turn); }
+    }
+
+    /* Stage */
+    .design-stage {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 56px;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      z-index: 4;
+    }
+
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .toolbar-title {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .toolbar-title strong {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .toolbar-title span {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tool-button {
+      min-width: 32px;
+      height: 32px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+    }
+
+    .tool-button:hover:not(:disabled) {
+      border-color: var(--line-strong);
+      background: var(--surface-soft);
+    }
+
+    .tool-button:focus-visible {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent), transparent 82%);
+    }
+
+    .tool-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+    }
+
+    .tool-button[data-active="true"] {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent-ink);
+    }
+
+    .zoom-readout {
+      min-width: 48px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+    }
+
+    .page-size-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .page-width-slider {
+      width: 140px;
+      accent-color: var(--accent);
+    }
+
+    /* Canvas */
+    .canvas-viewport {
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      touch-action: none;
+      background:
+        radial-gradient(circle, var(--canvas-dot) 1px, transparent 1px) 0 0 / 24px 24px,
+        var(--page);
+    }
+
+    .canvas-viewport.is-panning { cursor: grabbing; }
+    .canvas-viewport.is-selecting { cursor: crosshair; }
+
+    .page-viewport {
+      position: relative;
+      min-width: 0;
+      overflow: auto;
+      background: var(--page);
+    }
+
+    .page-viewport.is-selecting { cursor: crosshair; }
+
+    .page-shell {
+      width: 100%;
+      min-height: 100%;
+      margin: 0 auto;
+      background: var(--surface);
+    }
+
+    .dc-page {
+      min-width: 0;
+      min-height: 100%;
+    }
+
+    .canvas-world {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 2400px;
+      height: 1500px;
+      transform-origin: 0 0;
+    }
+
+    .canvas-label {
+      position: absolute;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .dc-section {
+      position: absolute;
+      display: grid;
+      gap: 18px;
+    }
+
+    .dc-section-heading {
+      display: grid;
+      gap: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .dc-section-heading strong {
+      color: var(--ink);
+      font-size: 14px;
+    }
+
+    .dc-section-artboards { position: relative; }
+
+    .artboard-frame {
+      position: absolute;
+      display: grid;
+      gap: 8px;
+    }
+
+    .artboard-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .artboard {
+      position: relative;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      align-content: start;
+      gap: 16px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .artboard > * {
+      min-width: 0;
+      max-width: 100%;
+      min-height: 0;
+      height: 100%;
+    }
+
+    .artboard[data-overflow] {
+      outline: 2px solid var(--overflow);
+      outline-offset: 3px;
+    }
+
+    .artboard[data-overflow]::after {
+      content: "overflow " attr(data-overflow);
+      position: absolute;
+      right: 8px;
+      top: 8px;
+      padding: 3px 6px;
+      border-radius: 6px;
+      background: var(--overflow);
+      color: white;
+      font-size: 10px;
+      line-height: 1;
+      pointer-events: none;
+      z-index: 3;
+    }
+
+    .dc-screen {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .dc-screen-body {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      overflow: auto;
+    }
+
+    .screen-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .screen-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .screen-tab,
+    .screen-action {
+      min-height: 32px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--ink);
+      white-space: nowrap;
+    }
+
+    .screen-tab.is-active,
+    .screen-action {
+      border-color: color-mix(in oklch, var(--accent), black 10%);
+      background: var(--accent-soft);
+    }
+
+    .screen-body {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+    }
+    .screen-kicker { color: var(--muted); font-size: 12px; }
+
+    .screen-heading {
+      margin: 0;
+      max-width: 15ch;
+      font-size: 26px;
+      line-height: 1.05;
+      letter-spacing: 0;
+      text-wrap: pretty;
+    }
+
+    .screen-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      text-wrap: pretty;
+    }
+
+    .screen-list { display: grid; gap: 8px; }
+
+    .screen-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .screen-row > * { min-width: 0; }
+    .screen-row strong { font-size: 13px; }
+    .screen-row span { color: var(--muted); font-size: 12px; }
+
+    .screen-pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent-ink);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    /* Selection popover */
+    .selector-popover {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      width: min(440px, calc(100vw - 32px));
+      display: grid;
+      gap: 8px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      z-index: 5;
+    }
+
+    .selector-popover strong {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--faint);
+      font-weight: 500;
+    }
+
+    .selector-code {
+      display: block;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface-soft);
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      overflow: auto;
+      white-space: nowrap;
+    }
+
+    .selector-popover .toolbar-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    /* Selection / preview indicators */
+    [data-selected="true"] {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    [data-select-preview="true"] {
+      outline: 2px solid var(--warn);
+      outline-offset: 3px;
+      background-color: color-mix(in oklch, var(--warn), transparent 86%);
+    }
+
+    @media (max-width: 760px) {
+      .workspace { grid-template-columns: 1fr; }
+      .agent-panel {
+        min-height: 45vh;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .toolbar { align-items: start; flex-direction: column; }
+      .toolbar-group { width: 100%; flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    const params = new URLSearchParams(window.location.search);
+    const INITIAL_PROJECT = params.get("project") || "default";
+    const PROJECT_FILE = "canvas.jsx";
+    const ARTBOARD = {
+      mobile: { width: 390, height: 844 },
+      mobileShort: { width: 390, height: 720 },
+      desktop: { width: 1280, height: 820 },
+      desktopWide: { width: 1440, height: 900 }
+    };
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function projectUrl(project) {
+      const next = new URL(window.location.href);
+      next.pathname = "/core/canvas.html";
+      next.searchParams.set("project", project);
+      return next.toString();
+    }
+
+    function selectorFor(element) {
+      const agentNode = element.closest("[data-agent-id]");
+      if (agentNode) return `[data-agent-id="${agentNode.dataset.agentId}"]`;
+
+      const path = [];
+      let node = element;
+      while (node && node.nodeType === Node.ELEMENT_NODE && node !== document.body) {
+        const tag = node.tagName.toLowerCase();
+        const className = [...node.classList].filter(Boolean)[0];
+        const siblingIndex = [...node.parentElement.children].indexOf(node) + 1;
+        path.unshift(`${tag}${className ? "." + className : ""}:nth-child(${siblingIndex})`);
+        node = node.parentElement;
+      }
+      return path.join(" > ");
+    }
+
+    async function loadDesignProject(project) {
+      window.DesignProject = null;
+      const projectPath = encodeURIComponent(project);
+      const filesResponse = await fetch(`/project-files?project=${projectPath}&t=${Date.now()}`);
+      if (!filesResponse.ok) throw new Error(`Could not list project files for "${project}"`);
+      const filesPayload = await filesResponse.json();
+      if (!filesPayload.ok) throw new Error(filesPayload.error || `Could not list project files for "${project}"`);
+
+      for (const file of filesPayload.files) {
+        const response = await fetch(`/projects/${projectPath}/${file}?t=${Date.now()}`);
+        if (!response.ok) throw new Error(`Could not load ${file} for "${project}"`);
+        const source = await response.text();
+        const code = Babel.transform(source, { presets: ["react"] }).code;
+        Function("React", code)(React);
+      }
+
+      if (!window.DesignProject?.render) throw new Error(`Project "${project}" did not define window.DesignProject.render`);
+      window.DesignProject.__projectVersion = filesPayload.version || "";
+      return window.DesignProject;
+    }
+
+    async function loadProjectVersion(project) {
+      const response = await fetch(`/project-files?project=${encodeURIComponent(project)}&t=${Date.now()}`);
+      const payload = await response.json();
+      if (!payload.ok) throw new Error(payload.error || `Could not list project files for "${project}"`);
+      return payload.version || "";
+    }
+
+    function Toolbar({ project, designProject, zoom, selectorMode, setSelectorMode, setZoom, resetView, viewMode, pageFit, setPageFit, pageWidth, setPageWidth }) {
+      return (
+        <header className="toolbar">
+          <div className="toolbar-group">
+            <div className="toolbar-title">
+              <strong>{designProject?.title || project}</strong>
+              <span>{designProject?.subtitle || "Canvas renderer with project-local files."}</span>
+            </div>
+          </div>
+          <div className="toolbar-group">
+            {viewMode === "page" ? (
+              <>
+                <button className="tool-button" data-active={pageFit} onClick={() => setPageFit((value) => !value)}>Fill</button>
+                <label className="page-size-control">
+                  <span>{pageFit ? "full" : `${pageWidth}px`}</span>
+                  <input
+                    className="page-width-slider"
+                    type="range"
+                    min="320"
+                    max="1440"
+                    step="10"
+                    value={pageWidth}
+                    disabled={pageFit}
+                    onChange={(event) => {
+                      setPageFit(false);
+                      setPageWidth(Number(event.target.value));
+                    }}
+                  />
+                </label>
+              </>
+            ) : (
+              <>
+                <button className="tool-button" aria-label="Zoom out" onClick={() => setZoom((z) => clamp(z - 0.1, 0.35, 1.8))}>-</button>
+                <span className="zoom-readout">{Math.round(zoom * 100)}%</span>
+                <button className="tool-button" aria-label="Zoom in" onClick={() => setZoom((z) => clamp(z + 0.1, 0.35, 1.8))}>+</button>
+                <button className="tool-button" onClick={resetView}>Reset</button>
+              </>
+            )}
+            <button className="tool-button" data-active={selectorMode} onClick={() => setSelectorMode((active) => !active)}>Select</button>
+          </div>
+        </header>
+      );
+    }
+
+    function ThemeIcon({ theme }) {
+      if (theme === "dark") {
+        return (
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
+            <circle cx="8" cy="8" r="3" />
+            <path d="M8 1.5v1.5M8 13v1.5M1.5 8h1.5M13 8h1.5M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" />
+          </svg>
+        );
+      }
+      return (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M11.6 9.6A4.6 4.6 0 0 1 6.4 4.4a.5.5 0 0 0-.7-.6 5.6 5.6 0 1 0 6.5 6.5.5.5 0 0 0-.6-.7Z" />
+        </svg>
+      );
+    }
+
+    function PlusIcon() {
+      return (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+          <path d="M6 2.2V9.8M2.2 6H9.8" />
+        </svg>
+      );
+    }
+
+    function AgentPanel({ project, selected, theme, toggleTheme, panelWidth, setPanelWidth }) {
+      const [agent, setAgent] = useState("codex");
+      const [messages, setMessages] = useState([]);
+      const [projects, setProjects] = useState([project]);
+      const [input, setInput] = useState("");
+      const [newProject, setNewProject] = useState("");
+      const [running, setRunning] = useState(false);
+      const [status, setStatus] = useState({ state: "idle" });
+      const [error, setError] = useState("");
+      const resizeRef = useRef(null);
+      const [resizing, setResizing] = useState(false);
+
+      function onResizeDown(event) {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        resizeRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: panelWidth };
+        setResizing(true);
+        document.body.classList.add("is-resizing");
+      }
+
+      function onResizeMove(event) {
+        if (!resizeRef.current || resizeRef.current.pointerId !== event.pointerId) return;
+        const delta = event.clientX - resizeRef.current.startX;
+        setPanelWidth(resizeRef.current.startWidth + delta);
+      }
+
+      function onResizeUp(event) {
+        if (!resizeRef.current || resizeRef.current.pointerId !== event.pointerId) return;
+        resizeRef.current = null;
+        setResizing(false);
+        document.body.classList.remove("is-resizing");
+      }
+
+      function onResizeReset() {
+        setPanelWidth(320);
+      }
+
+      async function loadProjects() {
+        const response = await fetch("/projects");
+        const payload = await response.json();
+        if (payload.ok) setProjects(payload.projects);
+      }
+
+      async function loadHistory() {
+        const response = await fetch(`/history?project=${encodeURIComponent(project)}&chat=default`);
+        const payload = await response.json();
+        if (payload.ok) setMessages(payload.messages);
+      }
+
+      async function loadStatus() {
+        const response = await fetch(`/status?project=${encodeURIComponent(project)}&chat=default`);
+        const payload = await response.json();
+        if (payload.ok) {
+          setStatus(payload.status);
+          setRunning(payload.status.state === "running");
+          if (payload.status.state === "error") setError(payload.status.message || "Agent run failed.");
+        }
+      }
+
+      useEffect(() => {
+        loadProjects().catch((err) => setError(String(err)));
+        loadHistory().catch((err) => setError(String(err)));
+        loadStatus().catch((err) => setError(String(err)));
+
+        const interval = window.setInterval(() => {
+          loadStatus().catch((err) => setError(String(err)));
+          loadHistory().catch((err) => setError(String(err)));
+        }, 2000);
+
+        return () => window.clearInterval(interval);
+      }, [project]);
+
+      async function runAgent() {
+        const message = input.trim();
+        if (!message || running) return;
+
+        setRunning(true);
+        setError("");
+        setInput("");
+
+        try {
+          const response = await fetch("/run-agent", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              project,
+              chat: "default",
+              agent,
+              file: PROJECT_FILE,
+              selector: selected?.selector || "",
+              message
+            })
+          });
+          const payload = await response.json();
+          await loadHistory();
+          await loadStatus();
+          if (!payload.ok) {
+            setError(payload.message || payload.stderr || payload.error || "Agent run failed.");
+            setRunning(false);
+            return;
+          }
+          setRunning(true);
+        } catch (err) {
+          setError(String(err));
+          setRunning(false);
+        }
+      }
+
+      async function newChat() {
+        await fetch("/clear-history", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ project, chat: "default" })
+        });
+        setMessages([]);
+        setError("");
+        setStatus({ state: "idle" });
+        setInput("");
+      }
+
+      async function createProject() {
+        const nextProject = newProject.trim();
+        if (!nextProject) return;
+        const response = await fetch("/create-project", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ project: nextProject, source: project })
+        });
+        const payload = await response.json();
+        if (!payload.ok) {
+          setError(payload.error || "Could not create project.");
+          return;
+        }
+        await loadProjects();
+        window.location.href = projectUrl(payload.project);
+      }
+
+      return (
+        <aside className="agent-panel">
+          <header className="agent-header">
+            <div className="agent-title">
+              <strong>Design Agent</strong>
+              <div className="agent-title-actions">
+                <button
+                  className="theme-toggle"
+                  onClick={toggleTheme}
+                  aria-label="Toggle theme"
+                  title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                >
+                  <ThemeIcon theme={theme} />
+                </button>
+                <select className="agent-select" value={agent} onChange={(event) => setAgent(event.target.value)}>
+                  <option value="codex">codex</option>
+                  <option value="claude">claude</option>
+                </select>
+              </div>
+            </div>
+            <div className="project-row">
+              <span>Project</span>
+              <select className="project-select" value={project} onChange={(event) => { window.location.href = projectUrl(event.target.value); }}>
+                {projects.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </div>
+            <div className="project-row">
+              <span>New</span>
+              <input className="project-input" value={newProject} placeholder="project-name" onChange={(event) => setNewProject(event.target.value)} />
+              <button className="tool-button" onClick={createProject}>New</button>
+            </div>
+            <div className="selection-context">
+              <span>Selected element</span>
+              <code>{selected?.selector || "none"}</code>
+            </div>
+            <div className="agent-status" data-state={status.state || "idle"}>
+              <strong>{status.state === "running" ? `${status.agent || agent} running` : status.state === "error" ? "Agent error" : status.state === "done" ? "Last run done" : "Agent idle"}</strong>
+              <span>{status.state === "running" ? status.message : status.message || "No active run"}</span>
+            </div>
+          </header>
+
+          <div className="chat-toolbar">
+            <span className="chat-toolbar-label">Chat</span>
+            <button
+              className="new-chat-button"
+              onClick={newChat}
+              disabled={running}
+              title="Start a new chat"
+            >
+              <PlusIcon />
+              New chat
+            </button>
+          </div>
+
+          <section className="chat-log">
+            {messages.map((message, index) => (
+              <article className="chat-message" data-role={message.role} key={`${message.ts}-${index}`}>
+                <div className="chat-meta">
+                  <strong>{message.role === "user" ? "You" : message.agent || "agent"}</strong>
+                  <span>{message.selector || message.exit_code === 0 ? "done" : ""}</span>
+                </div>
+                <div>{message.content}</div>
+              </article>
+            ))}
+            {error && (
+              <article className="chat-message">
+                <div className="chat-meta"><strong>Error</strong></div>
+                <div>{error}</div>
+              </article>
+            )}
+          </section>
+
+          <footer className="chat-composer">
+            <textarea
+              className="chat-input"
+              value={input}
+              placeholder="Describe what you want to change…"
+              rows={3}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runAgent();
+              }}
+            />
+            <div className="composer-actions">
+              <span className="composer-hint">⌘↵ to send</span>
+              <button
+                className="composer-send"
+                onClick={runAgent}
+                disabled={running || !input.trim()}
+                aria-label={running ? "Running" : "Send"}
+                title={running ? "Running" : "Send (⌘↵)"}
+              >
+                {running ? (
+                  <span className="composer-spinner" aria-hidden="true" />
+                ) : (
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </footer>
+
+          <div
+            className={`panel-resizer ${resizing ? "is-dragging" : ""}`}
+            onPointerDown={onResizeDown}
+            onPointerMove={onResizeMove}
+            onPointerUp={onResizeUp}
+            onPointerCancel={onResizeUp}
+            onDoubleClick={onResizeReset}
+            role="separator"
+            aria-label="Resize panel"
+            aria-valuemin={280}
+            aria-valuemax={640}
+            aria-valuenow={panelWidth}
+            title="Drag to resize · double-click to reset"
+          />
+        </aside>
+      );
+    }
+
+    function DCSection({ id, title, note, x, y, children }) {
+      return (
+        <section className="dc-section" style={{ left: x, top: y }} data-agent-id={`${id}.section`}>
+          <header className="dc-section-heading" data-agent-id={`${id}.heading`}>
+            <strong>{title}</strong>
+            {note && <span>{note}</span>}
+          </header>
+          <div className="dc-section-artboards" data-agent-id={`${id}.artboards`}>{children}</div>
+        </section>
+      );
+    }
+
+    function DCArtboard({ id, label, note, x, y, width = 390, height = 640, tone = 184, children }) {
+      const style = {
+        left: x,
+        top: y,
+        width,
+        "--dc-artboard-height": `${height}px`,
+        "--accent": `oklch(58% 0.13 ${tone})`,
+        "--accent-soft": `oklch(91% 0.055 ${tone})`
+      };
+
+      return (
+        <article className="artboard-frame" style={style} data-agent-id={`${id}.frame`}>
+          <div className="artboard-meta" data-agent-id={`${id}.meta`}>
+            <strong>{label}</strong>
+            {note && <span>{note}</span>}
+          </div>
+          <section className="artboard" style={{ height: "var(--dc-artboard-height)" }} data-agent-id={`${id}.artboard`}>
+            {children}
+          </section>
+        </article>
+      );
+    }
+
+    function DCPage({ id, children }) {
+      return (
+        <main className="dc-page" data-agent-id={`${id}.page`}>
+          {children}
+        </main>
+      );
+    }
+
+    function SelectionPopover({ selected }) {
+      if (!selected) return null;
+      return (
+        <aside className="selector-popover">
+          <strong>Selected element for agent edits</strong>
+          <code className="selector-code">{selected.selector}</code>
+          <span className="toolbar-title">
+            <span>{selected.tag}{selected.text ? `: ${selected.text}` : ""}</span>
+          </span>
+        </aside>
+      );
+    }
+
+    function Canvas({ designProject, zoom, setZoom, selectorMode, selected, setSelected, view, setView }) {
+      const viewportRef = useRef(null);
+      const dragRef = useRef(null);
+      const previewRef = useRef(null);
+
+      useEffect(() => {
+        const frame = window.requestAnimationFrame(() => {
+          document.querySelectorAll(".artboard").forEach((node) => {
+            const overflow = [];
+            if (node.scrollWidth > node.clientWidth + 1) overflow.push("x");
+            if (node.scrollHeight > node.clientHeight + 1) overflow.push("y");
+            if (overflow.length) {
+              node.setAttribute("data-overflow", overflow.join("/"));
+            } else {
+              node.removeAttribute("data-overflow");
+            }
+          });
+        });
+
+        return () => window.cancelAnimationFrame(frame);
+      }, [designProject]);
+
+      useEffect(() => {
+        const viewport = viewportRef.current;
+        if (!viewport) return;
+
+        function onNativeWheel(event) {
+          if (event.target.closest(".artboard")) return;
+          event.preventDefault();
+          const rect = viewport.getBoundingClientRect();
+          const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+          const nextZoom = clamp(zoom - delta * 0.0012, 0.35, 1.8);
+          const mouseX = event.clientX - rect.left;
+          const mouseY = event.clientY - rect.top;
+          const worldX = (mouseX - view.x) / zoom;
+          const worldY = (mouseY - view.y) / zoom;
+          setZoom(nextZoom);
+          setView({ x: mouseX - worldX * nextZoom, y: mouseY - worldY * nextZoom });
+        }
+
+        viewport.addEventListener("wheel", onNativeWheel, { passive: false });
+        return () => viewport.removeEventListener("wheel", onNativeWheel);
+      }, [setView, setZoom, view, zoom]);
+
+      useEffect(() => {
+        if (selectorMode) return;
+        previewRef.current?.removeAttribute("data-select-preview");
+        previewRef.current = null;
+      }, [selectorMode]);
+
+      function onPointerDown(event) {
+        if (selectorMode) return;
+        if (event.target.closest(".artboard")) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        dragRef.current = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          viewX: view.x,
+          viewY: view.y
+        };
+      }
+
+      function onPointerMove(event) {
+        if (selectorMode) {
+          const target = event.target.closest("[data-agent-id]");
+          if (previewRef.current && previewRef.current !== target) {
+            previewRef.current.removeAttribute("data-select-preview");
+          }
+          if (target && target !== previewRef.current) {
+            target.setAttribute("data-select-preview", "true");
+          }
+          previewRef.current = target;
+          return;
+        }
+
+        if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
+        const drag = dragRef.current;
+        setView({ x: drag.viewX + event.clientX - drag.startX, y: drag.viewY + event.clientY - drag.startY });
+      }
+
+      function onPointerUp(event) {
+        if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+      }
+
+      function onClick(event) {
+        if (!selectorMode) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const target = event.target.closest("[data-agent-id]") || event.target;
+        document.querySelectorAll("[data-selected='true']").forEach((node) => node.removeAttribute("data-selected"));
+        document.querySelectorAll("[data-select-preview='true']").forEach((node) => node.removeAttribute("data-select-preview"));
+        target.setAttribute("data-selected", "true");
+        previewRef.current = null;
+        setSelected({
+          selector: selectorFor(target),
+          tag: target.tagName.toLowerCase(),
+          text: target.innerText?.trim().slice(0, 90) || ""
+        });
+      }
+
+      return (
+        <section
+          ref={viewportRef}
+          className={`canvas-viewport ${dragRef.current ? "is-panning" : ""} ${selectorMode ? "is-selecting" : ""}`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          onClick={onClick}
+        >
+          <div className="canvas-world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${zoom})` }}>
+            {designProject?.render({ DCSection, DCArtboard, ARTBOARD })}
+          </div>
+
+          <SelectionPopover selected={selected} />
+        </section>
+      );
+    }
+
+    function PageView({ designProject, selectorMode, selected, setSelected, pageFit, pageWidth }) {
+      const previewRef = useRef(null);
+
+      useEffect(() => {
+        if (selectorMode) return;
+        previewRef.current?.removeAttribute("data-select-preview");
+        previewRef.current = null;
+      }, [selectorMode]);
+
+      function onPointerMove(event) {
+        if (!selectorMode) return;
+        const target = event.target.closest("[data-agent-id]");
+        if (previewRef.current && previewRef.current !== target) {
+          previewRef.current.removeAttribute("data-select-preview");
+        }
+        if (target && target !== previewRef.current) {
+          target.setAttribute("data-select-preview", "true");
+        }
+        previewRef.current = target;
+      }
+
+      function onClick(event) {
+        if (!selectorMode) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const target = event.target.closest("[data-agent-id]") || event.target;
+        document.querySelectorAll("[data-selected='true']").forEach((node) => node.removeAttribute("data-selected"));
+        document.querySelectorAll("[data-select-preview='true']").forEach((node) => node.removeAttribute("data-select-preview"));
+        target.setAttribute("data-selected", "true");
+        previewRef.current = null;
+        setSelected({
+          selector: selectorFor(target),
+          tag: target.tagName.toLowerCase(),
+          text: target.innerText?.trim().slice(0, 90) || ""
+        });
+      }
+
+      return (
+        <section className={`page-viewport ${selectorMode ? "is-selecting" : ""}`} onPointerMove={onPointerMove} onClick={onClick}>
+          <div className="page-shell" style={{ width: pageFit ? "100%" : `${pageWidth}px` }}>
+            {designProject?.render({ DCSection, DCArtboard, DCPage, ARTBOARD })}
+          </div>
+          <SelectionPopover selected={selected} />
+        </section>
+      );
+    }
+
+    function readPanelWidthFromStorage() {
+      try {
+        const stored = parseInt(localStorage.getItem("canvas-panel-width") || "320", 10);
+        if (!Number.isFinite(stored)) return 320;
+        return clamp(stored, 280, 640);
+      } catch (_err) {
+        return 320;
+      }
+    }
+
+    function readThemeFromStorage() {
+      try {
+        const stored = localStorage.getItem("canvas-theme");
+        if (stored === "light" || stored === "dark") return stored;
+      } catch (_err) {}
+      const fallback = document.documentElement.getAttribute("data-theme");
+      return fallback === "dark" ? "dark" : "light";
+    }
+
+    function App() {
+      const [project] = useState(INITIAL_PROJECT);
+      const [designProject, setDesignProject] = useState(null);
+      const [loadError, setLoadError] = useState("");
+      const [zoom, setZoom] = useState(0.9);
+      const [view, setView] = useState({ x: 40, y: 20 });
+      const [selectorMode, setSelectorMode] = useState(false);
+      const [selected, setSelected] = useState(null);
+      const [pageFit, setPageFit] = useState(true);
+      const [pageWidth, setPageWidth] = useState(1024);
+      const [panelWidth, setPanelWidthState] = useState(readPanelWidthFromStorage);
+      const [theme, setTheme] = useState(readThemeFromStorage);
+      const projectVersionRef = useRef("");
+      const loadingProjectRef = useRef(false);
+      const viewMode = designProject?.view === "page" ? "page" : "canvas";
+
+      function setPanelWidth(value) {
+        const max = Math.min(640, Math.max(320, window.innerWidth - 320));
+        const next = clamp(Math.round(value), 280, max);
+        setPanelWidthState(next);
+      }
+
+      useEffect(() => {
+        document.documentElement.style.setProperty("--panel-width", `${panelWidth}px`);
+        try { localStorage.setItem("canvas-panel-width", String(panelWidth)); } catch (_err) {}
+      }, [panelWidth]);
+
+      function toggleTheme() {
+        const next = theme === "dark" ? "light" : "dark";
+        setTheme(next);
+        document.documentElement.setAttribute("data-theme", next);
+        try { localStorage.setItem("canvas-theme", next); } catch (_err) {}
+      }
+
+      useEffect(() => {
+        async function refreshProject({ silent = false } = {}) {
+          if (loadingProjectRef.current) return;
+          loadingProjectRef.current = true;
+          try {
+            const nextProject = await loadDesignProject(project);
+            projectVersionRef.current = nextProject.__projectVersion || "";
+            setDesignProject(nextProject);
+            setLoadError("");
+          } catch (err) {
+            if (!silent) setLoadError(String(err));
+          } finally {
+            loadingProjectRef.current = false;
+          }
+        }
+
+        refreshProject();
+        const interval = window.setInterval(async () => {
+          try {
+            const nextVersion = await loadProjectVersion(project);
+            if (nextVersion && nextVersion !== projectVersionRef.current) {
+              await refreshProject({ silent: true });
+            }
+          } catch (_err) {
+            // Keep the last good canvas while files are mid-write or the server restarts.
+          }
+        }, 2000);
+
+        return () => window.clearInterval(interval);
+      }, [project]);
+
+      useEffect(() => {
+        function onKeyDown(event) {
+          if (event.key !== "Escape") return;
+          setSelectorMode(false);
+        }
+
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+      }, []);
+
+      function resetView() {
+        setZoom(0.9);
+        setView({ x: 40, y: 20 });
+      }
+
+      return (
+        <div className="workspace">
+          <AgentPanel
+            project={project}
+            selected={selected}
+            theme={theme}
+            toggleTheme={toggleTheme}
+            panelWidth={panelWidth}
+            setPanelWidth={setPanelWidth}
+          />
+          <main className="design-stage">
+            <Toolbar
+              project={project}
+              designProject={designProject}
+              zoom={zoom}
+              selectorMode={selectorMode}
+              setSelectorMode={setSelectorMode}
+              setZoom={setZoom}
+              resetView={resetView}
+              viewMode={viewMode}
+              pageFit={pageFit}
+              setPageFit={setPageFit}
+              pageWidth={pageWidth}
+              setPageWidth={setPageWidth}
+            />
+            {loadError ? (
+              <section className="chat-log"><article className="chat-message"><strong>Project load failed</strong><div>{loadError}</div></article></section>
+            ) : viewMode === "page" ? (
+              <PageView
+                designProject={designProject}
+                selectorMode={selectorMode}
+                selected={selected}
+                setSelected={setSelected}
+                pageFit={pageFit}
+                pageWidth={pageWidth}
+              />
+            ) : (
+              <Canvas
+                designProject={designProject}
+                zoom={zoom}
+                setZoom={setZoom}
+                selectorMode={selectorMode}
+                selected={selected}
+                setSelected={setSelected}
+                view={view}
+                setView={setView}
+              />
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
