@@ -466,6 +466,61 @@
       text-underline-offset: 2px;
     }
 
+    .attachment-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .attachment-preview {
+      position: relative;
+      width: 74px;
+      height: 58px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+    }
+
+    .attachment-preview img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    .attachment-remove {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 18px;
+      height: 18px;
+      display: inline-grid;
+      place-items: center;
+      border: 0;
+      border-radius: 999px;
+      background: oklch(18% 0.01 250 / 0.72);
+      color: white;
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .attachment-name {
+      position: absolute;
+      left: 4px;
+      right: 4px;
+      bottom: 4px;
+      padding: 2px 4px;
+      border-radius: 4px;
+      background: oklch(18% 0.01 250 / 0.62);
+      color: white;
+      font-size: 9px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     /* Composer */
     .chat-composer {
       display: grid;
@@ -513,6 +568,10 @@
       padding: 4px 6px 6px 10px;
     }
 
+    .composer-attachments {
+      padding: 8px 10px 0;
+    }
+
     .composer-ghost {
       height: 26px;
       padding: 0 8px;
@@ -543,6 +602,29 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .composer-attach {
+      width: 28px;
+      height: 28px;
+      display: inline-grid;
+      place-items: center;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--faint);
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .composer-attach:hover:not(:disabled) {
+      background: color-mix(in oklch, var(--ink), transparent 94%);
+      color: var(--muted);
+    }
+
+    .composer-attach:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
     }
 
     .composer-send {
@@ -1174,6 +1256,23 @@
       return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />;
     }
 
+    function AttachmentPreviews({ attachments, onRemove }) {
+      if (!attachments?.length) return null;
+      return (
+        <div className="attachment-strip">
+          {attachments.map((attachment, index) => (
+            <figure className="attachment-preview" key={`${attachment.url || attachment.path || attachment.name}-${index}`}>
+              <img src={attachment.url} alt={attachment.name || "Attached image"} />
+              {onRemove && (
+                <button className="attachment-remove" type="button" aria-label="Remove image" onClick={() => onRemove(index)}>×</button>
+              )}
+              <figcaption className="attachment-name">{attachment.name || "image"}</figcaption>
+            </figure>
+          ))}
+        </div>
+      );
+    }
+
     async function loadDesignProject(project) {
       window.DesignProject = null;
       const projectPath = encodeURIComponent(project);
@@ -1275,11 +1374,13 @@
       const [messages, setMessages] = useState([]);
       const [projects, setProjects] = useState([project]);
       const [input, setInput] = useState("");
+      const [attachments, setAttachments] = useState([]);
       const [newProject, setNewProject] = useState("");
       const [running, setRunning] = useState(false);
       const [status, setStatus] = useState({ state: "idle" });
       const [error, setError] = useState("");
       const resizeRef = useRef(null);
+      const fileInputRef = useRef(null);
       const [resizing, setResizing] = useState(false);
 
       function onResizeDown(event) {
@@ -1344,11 +1445,13 @@
 
       async function runAgent() {
         const message = input.trim();
-        if (!message || running) return;
+        if ((!message && !attachments.length) || running) return;
+        const outgoingAttachments = attachments;
 
         setRunning(true);
         setError("");
         setInput("");
+        setAttachments([]);
 
         try {
           const response = await fetch("/run-agent", {
@@ -1360,7 +1463,8 @@
               agent,
               file: PROJECT_FILE,
               selector: selected?.selector || "",
-              message
+              message,
+              attachments: outgoingAttachments
             })
           });
           const payload = await response.json();
@@ -1369,13 +1473,70 @@
           if (!payload.ok) {
             setError(payload.message || payload.stderr || payload.error || "Agent run failed.");
             setRunning(false);
+            setAttachments(outgoingAttachments);
             return;
           }
           setRunning(true);
         } catch (err) {
           setError(String(err));
           setRunning(false);
+          setAttachments(outgoingAttachments);
         }
+      }
+
+      function fileToDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error || new Error("Could not read image."));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      async function uploadImage(file) {
+        if (!file?.type?.startsWith("image/")) return;
+        const dataUrl = await fileToDataUrl(file);
+        const response = await fetch("/upload-attachment", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            project,
+            name: file.name || "pasted-image.png",
+            mime: file.type,
+            data: dataUrl
+          })
+        });
+        const payload = await response.json();
+        if (!payload.ok) throw new Error(payload.error || "Could not upload image.");
+        setAttachments((items) => [...items, payload.attachment]);
+      }
+
+      async function addImages(files) {
+        const images = [...files].filter((file) => file.type.startsWith("image/"));
+        if (!images.length) return;
+        setError("");
+        try {
+          for (const file of images) await uploadImage(file);
+        } catch (err) {
+          setError(String(err));
+        }
+      }
+
+      function onPaste(event) {
+        let files = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith("image/"));
+        if (!files.length) {
+          files = [...(event.clipboardData?.items || [])]
+            .filter((item) => item.type.startsWith("image/"))
+            .map((item) => item.getAsFile())
+            .filter(Boolean);
+        }
+        if (!files.length) return;
+        event.preventDefault();
+        addImages(files);
+      }
+
+      function removeAttachment(index) {
+        setAttachments((items) => items.filter((_, itemIndex) => itemIndex !== index));
       }
 
       async function newChat() {
@@ -1388,6 +1549,7 @@
         setError("");
         setStatus({ state: "idle" });
         setInput("");
+        setAttachments([]);
       }
 
       async function createProject() {
@@ -1469,6 +1631,7 @@
                   <span>{message.selector || message.exit_code === 0 ? "done" : ""}</span>
                 </div>
                 <MarkdownMessage content={message.content} />
+                <AttachmentPreviews attachments={message.attachments} />
               </article>
             ))}
             {error && (
@@ -1480,22 +1643,54 @@
           </section>
 
           <footer className="chat-composer">
+            {attachments.length > 0 && (
+              <div className="composer-attachments">
+                <AttachmentPreviews attachments={attachments} onRemove={removeAttachment} />
+              </div>
+            )}
             <textarea
               className="chat-input"
               value={input}
-              placeholder="Describe what you want to change…"
+              placeholder="Describe what you want to change… Paste images here."
               rows={3}
               onChange={(event) => setInput(event.target.value)}
+              onPaste={onPaste}
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runAgent();
               }}
             />
             <div className="composer-actions">
-              <span className="composer-hint">⌘↵ to send</span>
+              <button
+                className="composer-attach"
+                type="button"
+                disabled={running}
+                aria-label="Attach image"
+                title="Attach image"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M5.2 8.2 7 6.4l3.8 4.2" />
+                  <path d="M9.4 8.1 10.6 7l2.2 2.5" />
+                  <rect x="2.2" y="3" width="11.6" height="10" rx="1.8" />
+                  <circle cx="5.7" cy="5.7" r=".8" />
+                </svg>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(event) => {
+                  addImages(event.target.files || []);
+                  event.target.value = "";
+                }}
+              />
+              <span className="composer-hint">Paste image or ⌘↵ to send</span>
               <button
                 className="composer-send"
                 onClick={runAgent}
-                disabled={running || !input.trim()}
+                disabled={running || (!input.trim() && !attachments.length)}
                 aria-label={running ? "Running" : "Send"}
                 title={running ? "Running" : "Send (⌘↵)"}
               >

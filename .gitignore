@@ -5,6 +5,7 @@ __pycache__/
 # Runtime chat/status state. Keep project folders, not local conversations.
 projects/*/chats/*.jsonl
 projects/*/chats/*.status.json
+projects/*/attachments/
 
 # Local export artifacts.
 release/

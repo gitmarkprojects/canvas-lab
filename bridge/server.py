@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import threading
+from base64 import b64decode
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,6 +42,10 @@ def project_dir(project: str | None) -> Path:
 
 def chat_path(project: str | None, chat: str | None) -> Path:
     return project_dir(project) / "chats" / f"{safe_name(chat)}.jsonl"
+
+
+def attachments_dir(project: str | None) -> Path:
+    return project_dir(project) / "attachments"
 
 
 def status_path(project: str | None, chat: str | None) -> Path:
@@ -123,10 +128,63 @@ def chat_content(agent: str, exit_code: int, stdout: str, stderr: str) -> str:
     return combined_output(stdout, stderr)
 
 
+def attachment_lines(attachments: list[dict] | None) -> list[str]:
+    lines = []
+    for item in attachments or []:
+        path = item.get("path")
+        if not path:
+            continue
+        name = item.get("name") or Path(path).name
+        mime = item.get("mime") or "image"
+        lines.append(f"- {path} ({mime}, {name})")
+    return lines
+
+
+def save_attachment(payload: dict) -> dict:
+    project = payload.get("project") or "default"
+    mime = str(payload.get("mime") or "")
+    if not mime.startswith("image/"):
+        raise ValueError("only image attachments are supported")
+
+    raw_data = str(payload.get("data") or "")
+    if "," in raw_data and raw_data.startswith("data:"):
+        raw_data = raw_data.split(",", 1)[1]
+
+    data = b64decode(raw_data, validate=True)
+    if len(data) > 10 * 1024 * 1024:
+        raise ValueError("image attachment is larger than 10 MB")
+
+    ext_by_mime = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }
+    ext = ext_by_mime.get(mime, ".png")
+    name = safe_name(Path(str(payload.get("name") or "image")).stem, "image")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    filename = f"{stamp}-{name}{ext}"
+    directory = attachments_dir(project)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / filename
+    path.write_bytes(data)
+
+    project_name = safe_name(project)
+    relative_path = f"attachments/{filename}"
+    return {
+        "name": payload.get("name") or filename,
+        "mime": mime,
+        "path": relative_path,
+        "url": f"/projects/{project_name}/{relative_path}",
+        "size": len(data),
+    }
+
+
 def build_prompt(payload: dict, history: list[dict], cwd: Path) -> str:
     file_path = payload.get("file") or "canvas.jsx"
     selector = payload.get("selector") or "(none)"
     message = payload.get("message") or ""
+    current_attachments = attachment_lines(payload.get("attachments"))
     selected_element_context = (
         f'The user has marked this element and is referring to it: `{selector}`.'
         if selector != "(none)"
@@ -141,7 +199,11 @@ def build_prompt(payload: dict, history: list[dict], cwd: Path) -> str:
         prefix = f"{role}:"
         if item_selector:
             prefix += f" selector={item_selector}"
-        history_lines.append(f"{prefix}\n{content}")
+        lines = [f"{prefix}\n{content}"]
+        item_attachment_lines = attachment_lines(item.get("attachments"))
+        if item_attachment_lines:
+            lines.append("Attached images:\n" + "\n".join(item_attachment_lines))
+        history_lines.append("\n".join(lines))
 
     return f"""Read AGENTS.md and DESIGN.md in the current project folder.
 
@@ -158,6 +220,9 @@ Current file:
 Current marked element:
 {selected_element_context}
 
+Attached images for the current user request:
+{chr(10).join(current_attachments) if current_attachments else "(none)"}
+
 Full chat history:
 {chr(10).join(history_lines) if history_lines else "(empty)"}
 
@@ -167,6 +232,7 @@ Current user request:
 Rules:
 - Edit files directly in this project folder when the request asks for a change.
 - If a current marked element is present, treat it as the user's target unless the request clearly says otherwise.
+- If attached images are present, inspect/use those local image files as reference material for the user request.
 - Keep `canvas.jsx` focused on the board composition: `DCSection`, `DCArtboard`, and project metadata.
 - Use `components/*.jsx` for reusable or larger screens, especially when creating multiple screens or flows.
 - Component files should assign exported components to `window`, for example: `window.LoginScreen = LoginScreen`.
@@ -360,6 +426,15 @@ class BridgeHandler(SimpleHTTPRequestHandler):
             self.send_json(200, {"ok": True})
             return
 
+        if parsed.path == "/upload-attachment":
+            payload = read_json(self)
+            try:
+                attachment = save_attachment(payload)
+                self.send_json(200, {"ok": True, "attachment": attachment})
+            except Exception as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)})
+            return
+
         if parsed.path != "/run-agent":
             self.send_json(404, {"ok": False, "error": "unknown endpoint"})
             return
@@ -381,6 +456,7 @@ class BridgeHandler(SimpleHTTPRequestHandler):
         user_message = {
             "role": "user",
             "content": payload.get("message", ""),
+            "attachments": payload.get("attachments") or [],
             "selector": payload.get("selector"),
             "file": payload.get("file"),
             "agent": agent,
@@ -397,6 +473,7 @@ class BridgeHandler(SimpleHTTPRequestHandler):
                 "file": payload.get("file"),
                 "selector": payload.get("selector"),
                 "message": payload.get("message", ""),
+                "attachments": payload.get("attachments") or [],
                 "started_at": started_at,
             },
         )
