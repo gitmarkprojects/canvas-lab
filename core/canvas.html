@@ -1366,6 +1366,18 @@
       return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />;
     }
 
+    function agentStorageKey(project) {
+      return `canvas-agent:${project || "default"}`;
+    }
+
+    function readAgentForProject(project) {
+      try {
+        const stored = localStorage.getItem(agentStorageKey(project));
+        if (stored === "codex" || stored === "claude") return stored;
+      } catch (_err) {}
+      return "claude";
+    }
+
     function AttachmentPreviews({ attachments, onRemove }) {
       if (!attachments?.length) return null;
       return (
@@ -1546,7 +1558,7 @@
     }
 
     function AgentPanel({ project, selected, theme, toggleTheme, panelWidth, setPanelWidth }) {
-      const [agent, setAgent] = useState("codex");
+      const [agent, setAgentState] = useState(() => readAgentForProject(project));
       const [messages, setMessages] = useState([]);
       const [projects, setProjects] = useState([project]);
       const [input, setInput] = useState("");
@@ -1558,6 +1570,11 @@
       const resizeRef = useRef(null);
       const fileInputRef = useRef(null);
       const [resizing, setResizing] = useState(false);
+
+      function setAgent(nextAgent) {
+        setAgentState(nextAgent);
+        try { localStorage.setItem(agentStorageKey(project), nextAgent); } catch (_err) {}
+      }
 
       function onResizeDown(event) {
         event.preventDefault();
