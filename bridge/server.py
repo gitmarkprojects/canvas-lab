@@ -91,11 +91,7 @@ def build_export_html(project: str | None, mode: str = "download") -> str:
         source = script_text(source_path.read_text(encoding="utf-8"))
         scripts.append(f'<script type="text/babel" data-file="{file}">\n(() => {{\n{source}\n}})();\n</script>')
 
-    auto_print = (
-        "<script>window.addEventListener('load', () => setTimeout(() => window.print(), 500));</script>"
-        if mode == "print"
-        else ""
-    )
+    print_class = "export-mode-print" if mode == "print" else "export-mode-canvas"
 
     return f"""<!doctype html>
 <html lang="en">
@@ -224,16 +220,81 @@ def build_export_html(project: str | None, mode: str = "download") -> str:
     .screen-heading {{ margin: 0; max-width: 15ch; font-size: 26px; line-height: 1.05; letter-spacing: 0; }}
     .screen-copy {{ margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }}
 
+    .export-mode-print {{
+      background: var(--surface);
+    }}
+    .export-mode-print .canvas-viewport {{
+      min-height: auto;
+      overflow: visible;
+      padding: 32px;
+      background: var(--surface);
+    }}
+    .export-mode-print .canvas-world {{
+      width: auto;
+      height: auto;
+      display: grid;
+      gap: 40px;
+    }}
+    .export-mode-print .dc-section,
+    .export-mode-print .artboard-frame {{
+      position: static !important;
+    }}
+    .export-mode-print .dc-section {{
+      display: grid;
+      gap: 16px;
+    }}
+    .export-mode-print .dc-section-artboards {{
+      position: static;
+      display: grid;
+      gap: 28px;
+    }}
+    .export-mode-print .artboard-frame {{
+      width: min(100%, var(--export-artboard-width, 100%)) !important;
+      max-width: 100%;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }}
+    .export-mode-print .artboard {{
+      height: auto !important;
+      min-height: 0;
+      display: block;
+      overflow: visible;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }}
+    .export-mode-print .artboard > *,
+    .export-mode-print .dc-screen,
+    .export-mode-print .dc-screen-body {{
+      height: auto !important;
+      min-height: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }}
+    .export-mode-print .dc-screen {{
+      display: block;
+    }}
+    .export-mode-print .dc-screen-body {{
+      display: block;
+    }}
+    .export-mode-print .artboard [style*="height"] {{
+      max-height: none !important;
+    }}
+
     @media print {{
+      @page {{ margin: 12mm; }}
       body {{ background: white; }}
       .export-toolbar {{ display: none; }}
       .canvas-viewport {{ min-height: auto; padding: 0; overflow: visible; }}
-      .canvas-world {{ transform: scale(0.68); transform-origin: 0 0; }}
+      .canvas-world {{ transform: none; width: auto; height: auto; }}
       .page-viewport, .page-shell {{ min-height: auto; }}
+      .artboard-frame {{ break-after: page; page-break-after: always; }}
+      .artboard-frame:last-child {{ break-after: auto; page-break-after: auto; }}
     }}
   </style>
 </head>
-<body>
+<body class="{print_class}">
   <div id="export-root"></div>
   {"".join(scripts)}
   <script type="text/babel">
@@ -261,6 +322,7 @@ def build_export_html(project: str | None, mode: str = "download") -> str:
         left: x,
         top: y,
         width,
+        "--export-artboard-width": `${{width}}px`,
         "--dc-artboard-height": `${{height}}px`,
         "--accent": `oklch(58% 0.13 ${{tone}})`,
         "--accent-soft": `oklch(91% 0.055 ${{tone}})`
@@ -314,7 +376,6 @@ def build_export_html(project: str | None, mode: str = "download") -> str:
 
     ReactDOM.createRoot(document.getElementById("export-root")).render(<ExportApp />);
   </script>
-  {auto_print}
 </body>
 </html>
 """
